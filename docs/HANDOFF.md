@@ -1,24 +1,34 @@
 # Handoff / Current State
 
-_Last updated: 2026-09-09, v2 session (all five agents + live terminal dashboard)._
+_Last updated: 2026-09-09, v2.1 session (article-input mode)._
 
 Read this first, before `CHANGELOG.md` or the session logs, if you're picking
 this project up fresh (human or agent).
 
-## What exists right now (v2)
+## What exists right now (v2.1)
 
-All five agents from the design, orchestrated with LangGraph, communicating
-only through the shared SQLite blackboard:
+All five core agents from the design plus a v2.1 **Claim Extractor** front-end,
+orchestrated with LangGraph, communicating only through the shared SQLite
+blackboard:
 
 ```
-START ─┬─▶ source_finder ─┐
-       └─▶ opposition ─────┴─▶ cross_checker ──(disputed & confidence < 0.6
-                                    │  ▲          & passes < 1)──▶ deep_research ─┐
-                                    │  └─────────────────────────────────────────┘
-                                    ▼ (else)
-                               bias_analyzer ──▶ writer ──▶ END
+                       (article mode only)
+article ─▶ claim_extractor ─▶ primary claim ─┐
+                                             ▼
+claim ─────────────────────────────▶ START ─┬─▶ source_finder ─┐
+                                            └─▶ opposition ─────┴─▶ cross_checker ──(disputed & confidence < 0.6
+                                                                        │  ▲          & passes < 1)──▶ deep_research ─┐
+                                                                        │  └─────────────────────────────────────────┘
+                                                                        ▼ (else)
+                                                                   bias_analyzer ──▶ writer ──▶ END
 ```
 
+- **Claim Extractor** (v2.1, article mode) — `identify_source()` finds the
+  publishing outlet from a URL / byline / credit; one LLM call extracts the
+  primary checkable claim (+ up to two secondary). Writes a `source_docs` row
+  keyed by the extracted claim's id, then the normal graph runs on that claim.
+  Two entry points in `graph.py`: `run_pipeline` (claim) / `run_article_pipeline`
+  (article).
 - **Source-Finder** — neutral GDELT search → `findings` row, `role=source_finder`.
 - **Opposition** — LLM makes disconfirming search angles, runs them → `findings`
   row, `role=opposition`, with a `summary` counter-framing.
@@ -30,10 +40,12 @@ START ─┬─▶ source_finder ─┐
   results, loops back to Cross-Checker.
 - **Bias/Blindspot Analyzer** — maps every retrieved outlet via
   `tools/bias_table.py` → `bias_reports` row (L/C/R spread, blindspot notes,
-  dominant side). No LLM.
-- **Writer** — reads verdict + both findings + bias report, LLM composes the
-  report, deterministic audit-trail section appended from `audit_log` →
-  `reports` row (also the "already checked" cache).
+  dominant side). No LLM. In article mode it also folds in the submitting
+  outlet and flags "no independent outlet corroborates this".
+- **Writer** — reads verdict + both findings + bias report (+ `source_docs` in
+  article mode), LLM composes the report, deterministic **Source of the
+  submitted article** section prepended + audit-trail section appended from
+  `audit_log` → `reports` row (also the "already checked" cache).
 
 **Observability**: every agent start/finish, tool call, and blackboard
 read/write is an `Event` (`observability/events.py`). `main.py` fans events to a
@@ -41,10 +53,11 @@ read/write is an `Event` (`observability/events.py`). `main.py` fans events to a
 `audit_log` table). The store emits `bb_read`/`bb_write` when a call is
 attributed with `by=<agent>`.
 
-**Runs offline**: `python -m newsfact.main --demo` uses `demo/fixtures.py`
-(scripted GDELT + Claude) — full pipeline, full dashboard, no keys, no network.
-Three bundled sample claims hit all three verdict paths. With `ANTHROPIC_API_KEY`
-set it auto-switches to the real clients.
+**Runs offline**: `python -m newsfact.main --demo` (three sample claims) or
+`python -m newsfact.main --demo --article` (bundled sample article) uses
+`demo/fixtures.py` (scripted GDELT + Claude) — full pipeline, full dashboard,
+no keys, no network. With `ANTHROPIC_API_KEY` set it auto-switches to the real
+clients.
 
 **Still no live API call has been made** (env kept stubbed by request). The code
 is written against the real GDELT and Anthropic APIs but only exercised via
@@ -73,12 +86,25 @@ anything downstream.
    revisit before any high-volume mode.
 6. **Story/event clustering** — still not needed (claim-at-a-time / small batch,
    not a "what's trending" feed).
-7. **Web UI — v3, deliberately not started.** v2 is terminal-only by request.
+7. **Web UI — v3, deliberately not started.** Terminal-only by request.
+8. **Source identification is heuristic** (`tools/source_id.py`, v2.1). URL →
+   domain is reliable; byline/credit matching is a substring scan against the
+   bias-table outlet names and will miss unlisted outlets and mis-hit on common
+   words. It never fetches the URL, so it can't detect wire-copy republished
+   under a local masthead. Fine as a "best guess"; don't build trust logic on
+   `origin_method == "byline"` without hardening it.
+9. **Claim Extractor picks ONE primary claim.** Multi-claim articles get their
+   secondary claims recorded in `source_docs` but only the primary one is
+   actually run through the pipeline.
 
 ## Known rough edges
 
 - `tools/gdelt.py::_parse_response` assumptions are still unverified against a
   real GDELT response (see above).
+- Article mode always runs the full pipeline — the report-cache pre-check in
+  `main.py` is claim-mode only (the `claim_id` isn't known until extraction).
+- The demo `FakeLLMClient`'s Claim Extractor branch is keyword-scripted like the
+  rest — real extraction quality is unexercised.
 - The demo `FakeLLMClient` is scripted by keyword, not smart — it recognises the
   three bundled sample claims and falls back to a generic corroborated result
   for anything else. It exists to make the pipeline *visible*, not to simulate

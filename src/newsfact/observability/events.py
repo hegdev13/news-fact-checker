@@ -38,6 +38,7 @@ class EventKind:
 
 
 AGENTS = (
+    "claim_extractor",   # article-input mode only (v2.1); skipped in claim mode
     "source_finder",
     "opposition",
     "cross_checker",

@@ -78,6 +78,25 @@ class Report:
     created_at: float = field(default_factory=time.time)
 
 
+@dataclass
+class SourceDoc:
+    """The article a user submitted (v2.1 article-input mode): where it came
+    from and what checkable claims the Claim Extractor pulled out of it."""
+
+    claim_id: str                       # id of the extracted PRIMARY claim
+    primary_claim: str
+    secondary_claims: list[str] = field(default_factory=list)
+    origin_domain: str = "unknown"      # publishing outlet's domain, if identified
+    origin_name: str = "unknown"
+    origin_bias: str = "unknown"        # from the outlet bias table
+    origin_factuality: str = "unknown"
+    origin_country: str = "unknown"
+    origin_method: str = "none"         # how the origin was identified: url|byline|none
+    byline: str = ""
+    excerpt: str = ""                   # first ~600 chars of the submitted text
+    created_at: float = field(default_factory=time.time)
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS claims (
     id TEXT PRIMARY KEY,
@@ -134,6 +153,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
     data_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_claim ON audit_log (claim_id, id);
+
+CREATE TABLE IF NOT EXISTS source_docs (
+    claim_id TEXT PRIMARY KEY,
+    primary_claim TEXT NOT NULL,
+    secondary_claims_json TEXT NOT NULL,
+    origin_domain TEXT NOT NULL,
+    origin_name TEXT NOT NULL,
+    origin_bias TEXT NOT NULL,
+    origin_factuality TEXT NOT NULL,
+    origin_country TEXT NOT NULL,
+    origin_method TEXT NOT NULL,
+    byline TEXT NOT NULL,
+    excerpt TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (claim_id) REFERENCES claims (id)
+);
 """
 
 
@@ -399,6 +434,57 @@ class BlackboardStore:
         if by is not None:
             self._emit(EventKind.BB_READ, by, "read prior report (cache)", cid)
         return report
+
+    # --- source docs (article-input mode) --------------------------------
+    def write_source_doc(self, doc: SourceDoc, by: str | None = None) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO source_docs
+                       (claim_id, primary_claim, secondary_claims_json, origin_domain, origin_name,
+                        origin_bias, origin_factuality, origin_country, origin_method, byline, excerpt, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(claim_id) DO UPDATE SET
+                       primary_claim = excluded.primary_claim,
+                       secondary_claims_json = excluded.secondary_claims_json,
+                       origin_domain = excluded.origin_domain,
+                       origin_name = excluded.origin_name,
+                       origin_bias = excluded.origin_bias,
+                       origin_factuality = excluded.origin_factuality,
+                       origin_country = excluded.origin_country,
+                       origin_method = excluded.origin_method,
+                       byline = excluded.byline,
+                       excerpt = excluded.excerpt,
+                       created_at = excluded.created_at""",
+                (
+                    doc.claim_id, doc.primary_claim, json.dumps(doc.secondary_claims),
+                    doc.origin_domain, doc.origin_name, doc.origin_bias, doc.origin_factuality,
+                    doc.origin_country, doc.origin_method, doc.byline, doc.excerpt, doc.created_at,
+                ),
+            )
+        if by is not None:
+            origin = doc.origin_name if doc.origin_method != "none" else "unidentified"
+            self._emit(
+                EventKind.BB_WRITE, by,
+                f"wrote source doc: origin={origin}, {len(doc.secondary_claims)} secondary claim(s)",
+                doc.claim_id, origin_domain=doc.origin_domain, origin_method=doc.origin_method,
+            )
+
+    def get_source_doc(self, cid: str, by: str | None = None) -> SourceDoc | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT claim_id, primary_claim, secondary_claims_json, origin_domain, origin_name,
+                          origin_bias, origin_factuality, origin_country, origin_method, byline, excerpt, created_at
+                   FROM source_docs WHERE claim_id = ?""",
+                (cid,),
+            ).fetchone()
+        doc = None if row is None else SourceDoc(
+            claim_id=row[0], primary_claim=row[1], secondary_claims=json.loads(row[2]),
+            origin_domain=row[3], origin_name=row[4], origin_bias=row[5], origin_factuality=row[6],
+            origin_country=row[7], origin_method=row[8], byline=row[9], excerpt=row[10], created_at=row[11],
+        )
+        if by is not None:
+            self._emit(EventKind.BB_READ, by, "read submitted-article source doc", cid)
+        return doc
 
     # --- audit log -----------------------------------------------------
     def append_audit(self, event: Event) -> None:

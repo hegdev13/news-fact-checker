@@ -5,6 +5,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-09-09 — "v2.1: article-input mode"
+
+### Added
+- **Claim Extractor agent** (`agents/claim_extractor.py`) — front-end for
+  "here is an article, check it": one LLM call extracts the central checkable
+  claim (+ up to two secondary claims); that primary claim becomes the
+  `claim_id` the existing 5-agent pipeline runs on, unchanged. Falls back to a
+  headline heuristic if the LLM output is unusable.
+- **Source identification** (`tools/source_id.py`) — "find the source": maps a
+  submitted article to its publishing outlet from an accompanying URL, the
+  first URL in the body, or a byline / "(Reuters)"-style credit matched against
+  the bias table. Pure/offline — a URL is parsed, never fetched.
+- **`source_docs` table** + `SourceDoc` dataclass — persists the submitted
+  article's origin outlet (domain, name, bias, factuality, country, how it was
+  identified), byline, extracted claims, and an excerpt, keyed by the extracted
+  primary claim's id.
+- **`run_article_pipeline()`** (`graph.py`) — article mode orchestration:
+  Claim Extractor → the normal `build_graph` pipeline on the extracted claim.
+- CLI: `--article PATH` (`-` = stdin, bare flag = bundled sample),
+  `--article-text TEXT`, `--article-url URL`. Recap tags article runs
+  "(from article)".
+- `resources/sample_article.txt` — bundled sample for `--demo --article`.
+- Tests: `test_source_id.py`, `test_claim_extractor.py`,
+  `test_article_pipeline.py` (15 new, still fully offline; 59 total).
+
+### Changed
+- **Bias/Blindspot Analyzer** now folds the submitting outlet into the L/C/R
+  spread (deduped by domain, tagged `origin`) and adds origin-specific
+  blindspot notes — most importantly "No independent outlet corroborates the
+  submitted article — only its own publisher carries this claim."
+- **Writer** prepends a deterministic **Source of the submitted article**
+  section (outlet + bias/factuality + how identified + extracted claims) when a
+  `SourceDoc` exists, and passes `submitted_article` in its LLM payload.
+- **Console dashboard** — `claim_extractor` added to the agent roster (its row
+  shows only in article mode); a "Submitted src" line appears on the
+  blackboard panel.
+- `demo/fixtures.py` — `FakeLLMClient` gains a `Claim Extractor agent` branch.
+- `pyproject.toml` / `__init__.py` — version `0.2.1`.
+
+### Notes
+- Article mode always runs the full pipeline (no pre-run report-cache
+  short-circuit, since the `claim_id` isn't known until extraction); the report
+  is still cached for later claim-mode lookups.
+- Still no live GDELT / Anthropic call this session — env kept stubbed.
+
 ## [0.2.0] — 2026-09-09 — "v2: all five agents + live terminal dashboard"
 
 ### Added

@@ -28,6 +28,7 @@ from rich.text import Text
 from newsfact.observability.events import AGENTS, Event, EventKind
 
 _AGENT_LABELS = {
+    "claim_extractor": "Claim Extractor",
     "source_finder": "Source-Finder",
     "opposition": "Opposition",
     "cross_checker": "Cross-Checker",
@@ -131,7 +132,13 @@ class ConsoleReporter:
     def _update_blackboard(self, event: Event) -> None:
         d = event.data or {}
         role = d.get("role")
-        if event.kind == EventKind.BB_WRITE and role in ("source_finder", "opposition"):
+        if event.kind == EventKind.BB_WRITE and event.agent == "claim_extractor":
+            method = d.get("origin_method", "none")
+            self._bb["source"] = (
+                f"{d.get('origin_domain', 'unknown')} (via {method})" if method != "none"
+                else "origin outlet not identified"
+            )
+        elif event.kind == EventKind.BB_WRITE and role in ("source_finder", "opposition"):
             n = d.get("article_count", d.get("total", "?"))
             self._bb[role] = f"{n} articles"
         elif event.kind == EventKind.BB_WRITE and "label" in d:
@@ -165,6 +172,10 @@ class ConsoleReporter:
         agents.add_column("Last action", overflow="fold")
         for role in AGENTS:
             st = self._agents[role]["status"]
+            # Claim Extractor only runs in article-input mode — hide its row in
+            # claim mode (where it never emits an event and stays pending).
+            if role == "claim_extractor" and st == "pending" and not self._agents[role]["last"]:
+                continue
             agents.add_row(
                 Text(_STATUS_ICON[st], style=_STATUS_STYLE[st]),
                 Text(_AGENT_LABELS[role], style=_STATUS_STYLE[st]),
@@ -174,9 +185,10 @@ class ConsoleReporter:
         bb = Table(show_header=False, box=None, pad_edge=False, expand=True)
         bb.add_column("k", style="dim", width=14)
         bb.add_column("v", overflow="fold")
-        for key in ("source_finder", "opposition", "verdict", "bias", "report"):
+        for key in ("source", "source_finder", "opposition", "verdict", "bias", "report"):
             if key in self._bb:
-                bb.add_row(_AGENT_LABELS.get(key, key.replace("_", " ")), self._bb[key])
+                label = "Submitted src" if key == "source" else _AGENT_LABELS.get(key, key.replace("_", " "))
+                bb.add_row(label, self._bb[key])
         if not self._bb:
             bb.add_row("—", "nothing written yet")
 

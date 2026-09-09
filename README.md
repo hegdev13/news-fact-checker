@@ -5,28 +5,34 @@ coverage of it splits across the political spectrum. See
 [`docs/resource-document.md`](docs/resource-document.md) for the full project
 brief, prior-art survey, and known gaps.
 
-## Status: v2 — all five agents + live terminal dashboard
+## Status: v2.1 — five agents + article-input mode + live terminal dashboard
 
 v2 completes the agent roster from the design and makes the whole pipeline
-watchable in the terminal as it processes each news item.
+watchable in the terminal. **v2.1** adds article-input mode: submit a whole
+article and a **Claim Extractor** identifies its publishing outlet ("find the
+source") and pulls out the checkable claim, then the normal pipeline runs.
 
 | Agent | Status | Does |
 |---|---|---|
+| **Claim Extractor** | ✅ v2.1 | Article-input mode only: identifies the article's publishing outlet (URL / byline / credit) and extracts the primary checkable claim (+ secondary) the rest of the pipeline runs on |
 | **Source-Finder** | ✅ | Neutral GDELT search for coverage of the claim; writes structured findings to the shared blackboard |
 | **Opposition** | ✅ | **Hard-mandated adversary** — LLM generates disconfirming search angles, runs them, writes counter-evidence + a one-line counter-framing |
 | **Cross-Checker** | ✅ | Adjudicates Source-Finder vs Opposition evidence into a confidence-scored verdict (`corroborated` / `disputed` / `unverifiable`, never true/false) |
-| **Bias/Blindspot Analyzer** | ✅ | Maps every retrieved outlet to a bias/factuality rating, computes the L/C/R spread, flags blindspots |
-| **Writer** | ✅ | Merges verdict + evidence + opposition + bias into one report; appends a deterministic audit trail |
+| **Bias/Blindspot Analyzer** | ✅ | Maps every retrieved outlet to a bias/factuality rating, computes the L/C/R spread, flags blindspots; in article mode folds in the submitting outlet and flags "no independent corroboration" |
+| **Writer** | ✅ | Merges verdict + evidence + opposition + bias into one report; leads with the source of the submitted article (article mode); appends a deterministic audit trail |
 
 Orchestration (LangGraph):
 
 ```
-START ─┬─▶ source_finder ─┐
-       └─▶ opposition ─────┴─▶ cross_checker ──(disputed & low confidence)──▶ deep_research ─┐
-                                    │  ▲                                                      │
-                                    │  └──────────────────────────────────────────────────────┘
-                                    ▼ (else)
-                               bias_analyzer ──▶ writer ──▶ END
+                       (article mode only)
+article ─▶ claim_extractor ─▶ primary claim ─┐
+                                             ▼
+claim ─────────────────────────────▶ START ─┬─▶ source_finder ─┐
+                                            └─▶ opposition ─────┴─▶ cross_checker ──(disputed & low confidence)──▶ deep_research ─┐
+                                                                        │  ▲                                                      │
+                                                                        │  └──────────────────────────────────────────────────────┘
+                                                                        ▼ (else)
+                                                                   bias_analyzer ──▶ writer ──▶ END
 ```
 
 Agents never hand state to each other directly — they read and write a shared
@@ -41,13 +47,27 @@ pip install -e ".[dev]"
 python -m newsfact.main --demo
 ```
 
-`--demo` runs the full 5-agent pipeline over three bundled sample news items
-using offline fixtures for GDELT and Claude — nothing hits the network. You get
-the live dashboard, three verdict paths (corroborated / disputed-with-loop /
+`--demo` runs the full pipeline over three bundled sample news items using
+offline fixtures for GDELT and Claude — nothing hits the network. You get the
+live dashboard, three verdict paths (corroborated / disputed-with-loop /
 unverifiable), a rendered report per item, and a run recap.
 
 Add `--plain` to disable the live region and print a flat event trace (good for
 piping to a file). Add `--json` for a machine-readable summary.
+
+### Article-input mode (v2.1)
+
+```bash
+python -m newsfact.main --demo --article                       # bundled sample article
+python -m newsfact.main --article path/to/article.txt
+python -m newsfact.main --article - --article-url https://outlet.example/story   # article on stdin
+python -m newsfact.main --article-text "Full article text here..."
+```
+
+The Claim Extractor identifies the article's publishing outlet (from
+`--article-url`, a URL in the text, or a byline/credit) and extracts the primary
+checkable claim; the report then leads with **Source of the submitted article**
+and flags if only that outlet carries the story.
 
 ## Real run
 
@@ -55,6 +75,7 @@ piping to a file). Add `--json` for a machine-readable summary.
 cp .env.example .env          # then set ANTHROPIC_API_KEY
 python -m newsfact.main "Claim or headline to check" "A second claim"
 python -m newsfact.main --file path/to/claims.txt
+python -m newsfact.main --article path/to/article.txt
 ```
 
 With `ANTHROPIC_API_KEY` set it uses the real Anthropic API and the live GDELT
@@ -75,14 +96,14 @@ fixtures. No API keys required.
 
 ```
 src/newsfact/
-  agents/          source_finder, opposition, cross_checker, bias_analyzer, writer
-  tools/           gdelt.py, bias_table.py
+  agents/          claim_extractor, source_finder, opposition, cross_checker, bias_analyzer, writer
+  tools/           gdelt.py, bias_table.py, source_id.py
   memory/          store.py — shared SQLite blackboard (claims, findings, verdicts,
-                   bias_reports, reports, audit_log)
+                   bias_reports, reports, audit_log, source_docs)
   observability/   events.py (event model + reporter sinks), console.py (live dashboard)
   demo/            fixtures.py — offline FakeGdeltClient / FakeLLMClient
-  resources/       outlet_bias.json (curated bias table), sample_claims.txt
-  graph.py         LangGraph wiring for the 5-agent pipeline + deep-research loop
+  resources/       outlet_bias.json (curated bias table), sample_claims.txt, sample_article.txt
+  graph.py         LangGraph wiring: run_pipeline (claim) / run_article_pipeline (article) + deep-research loop
   main.py          CLI entrypoint
 docs/
   resource-document.md   original brief / research

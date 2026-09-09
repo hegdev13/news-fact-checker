@@ -21,6 +21,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from newsfact.agents.bias_analyzer import run_bias_analyzer
+from newsfact.agents.claim_extractor import run_claim_extractor
 from newsfact.agents.cross_checker import run_cross_checker
 from newsfact.agents.opposition import run_opposition
 from newsfact.agents.source_finder import run_source_finder
@@ -125,6 +126,23 @@ def build_graph(
     return graph.compile()
 
 
+def _invoke_graph(
+    claim_text: str,
+    cid: str,
+    store: BlackboardStore,
+    gdelt_client: GdeltClient,
+    llm_client: LLMClient,
+    bias_table: BiasTable,
+    reporter: Reporter,
+) -> GraphState:
+    app = build_graph(store, gdelt_client, llm_client, bias_table, reporter)
+    result = app.invoke({"claim_text": claim_text, "claim_id": cid, "research_passes": 0})
+    reporter.emit(Event(EventKind.ITEM_DONE, "orchestrator",
+                        f"done: {result.get('verdict_label')} "
+                        f"({result.get('verdict_confidence', 0.0):.2f})", cid))
+    return result
+
+
 def run_pipeline(
     claim_text: str,
     store: BlackboardStore,
@@ -133,15 +151,34 @@ def run_pipeline(
     bias_table: BiasTable | None = None,
     reporter: Reporter | None = None,
 ) -> GraphState:
+    """Claim mode: check a single claim/headline string."""
     # Fall back to whatever observability the store already carries, so callers
     # that configured it once (main.py, tests) don't have to pass it twice.
     reporter = reporter or store.reporter or NullReporter()
     bias_table = bias_table or BiasTable.load()
     cid = store.ensure_claim(claim_text)
     reporter.emit(Event(EventKind.ITEM_START, "orchestrator", claim_text, cid))
-    app = build_graph(store, gdelt_client, llm_client, bias_table, reporter)
-    result = app.invoke({"claim_text": claim_text, "claim_id": cid, "research_passes": 0})
-    reporter.emit(Event(EventKind.ITEM_DONE, "orchestrator",
-                        f"done: {result.get('verdict_label')} "
-                        f"({result.get('verdict_confidence', 0.0):.2f})", cid))
-    return result
+    return _invoke_graph(claim_text, cid, store, gdelt_client, llm_client, bias_table, reporter)
+
+
+def run_article_pipeline(
+    article_text: str,
+    store: BlackboardStore,
+    gdelt_client: GdeltClient,
+    llm_client: LLMClient,
+    bias_table: BiasTable | None = None,
+    reporter: Reporter | None = None,
+    url: str | None = None,
+) -> GraphState:
+    """Article mode (v2.1): submit a full article. The Claim Extractor identifies
+    the source outlet and pulls out the primary checkable claim; the normal
+    5-agent graph then runs on that claim."""
+    reporter = reporter or store.reporter or NullReporter()
+    bias_table = bias_table or BiasTable.load()
+
+    first_line = next((ln.strip() for ln in article_text.splitlines() if ln.strip()), "(submitted article)")
+    # ITEM_START with a provisional id; the real claim_id follows extraction.
+    reporter.emit(Event(EventKind.ITEM_START, "orchestrator", f"[article] {first_line[:120]}", None))
+
+    cid, _doc = run_claim_extractor(article_text, url, store, llm_client, bias_table, reporter)
+    return _invoke_graph(_doc.primary_claim, cid, store, gdelt_client, llm_client, bias_table, reporter)

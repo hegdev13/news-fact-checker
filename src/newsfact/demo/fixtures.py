@@ -130,6 +130,8 @@ class FakeLLMClient:
             return user
 
     def complete(self, system: str, user: str) -> str:
+        if "Claim Extractor agent" in system:
+            return self._claim_extractor(user)
         if "Opposition agent" in system:
             return self._opposition(user)
         if "Cross-Checker agent" in system:
@@ -137,6 +139,31 @@ class FakeLLMClient:
         if "Writer agent" in system:
             return self._writer(user)
         return json.dumps({"note": "unrecognised agent prompt"})
+
+    def _claim_extractor(self, user: str) -> str:
+        """`user` is the raw article text here, not JSON."""
+        t = user.lower()
+        if "7.8%" in t or ("india" in t and "econom" in t):
+            return json.dumps({
+                "primary_claim": "India's economy grew 7.8% in the most recent quarter, the fastest among major economies.",
+                "secondary_claims": [
+                    "The growth was driven by services and a farm-sector rebound.",
+                    "India's growth outpaced China's in the same quarter.",
+                ],
+                "article_summary": "An article reporting India's latest quarterly GDP growth figure and its ranking among major economies.",
+            })
+        if "coffee" in t or "cognitive" in t:
+            return json.dumps({
+                "primary_claim": "A new study claims a single cup of coffee per day reverses cognitive decline in adults over 60.",
+                "secondary_claims": ["The effect was measured after a short trial period."],
+                "article_summary": "An article summarising a study that links daily coffee to recovered cognitive function in older adults.",
+            })
+        # generic: first substantial line that looks like a sentence, not metadata
+        for line in user.splitlines():
+            line = line.strip()
+            if len(line) >= 25 and not line.lower().startswith(("http", "by ", "source:", "source :", "photo", "image")):
+                return json.dumps({"primary_claim": line[:200], "secondary_claims": [], "article_summary": line[:200]})
+        return json.dumps({"primary_claim": user.strip()[:200] or "(empty article)", "secondary_claims": [], "article_summary": ""})
 
     # -- per-agent scripts
     def _opposition(self, user: str) -> str:

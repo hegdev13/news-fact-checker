@@ -2,8 +2,9 @@
 
 > The sections below describe v1 (the 2-agent slice). **v2 additions —
 > Opposition, Bias/Blindspot Analyzer, Writer, the deep-research loop, the
-> observability layer, and the offline demo — are documented at the end of this
-> file under "## v2 additions".**
+> observability layer, and the offline demo — are under "# v2 additions" near
+> the end. v2.1 (article-input mode + Claim Extractor) is under
+> "# v2.1 additions" at the very end.**
 
 # Architecture & Design Decisions (v1)
 
@@ -205,3 +206,63 @@ Opposition → Cross-Checker directly, and conditional edges express the loop.
 SQLite already had the "cache checked claims" job; the audit log is one more
 table in the same file. The web UI is v3 by explicit request — v2's job was
 "all agents present, communicating, and the process visible in the terminal".
+
+---
+
+# v2.1 additions — article-input mode
+
+v2.1 adds a front-end: submit a whole article instead of a claim string. The
+5-agent pipeline downstream is unchanged — a new **Claim Extractor** agent
+turns the article into the primary claim the graph already knows how to check.
+
+## Claim Extractor (`agents/claim_extractor.py`)
+
+Two jobs in one turn:
+
+1. **Find the source** — `tools/source_id.py::identify_source(text, url, table)`
+   returns an `OriginGuess`: it tries an explicit `--article-url`, then the
+   first URL in the body (parsed for its domain, **never fetched**), then a
+   byline / `(Reuters)`-style credit / bare outlet-name match against the bias
+   table's outlet names. `method` is `"url"` / `"byline"` / `"none"`.
+2. **Extract the claim** — one LLM call → `{primary_claim, secondary_claims[],
+   article_summary}`. Falls back to a first-substantial-line headline heuristic
+   if the response is unusable. `store.ensure_claim(primary_claim)` yields the
+   `claim_id` everything else keys off.
+
+It writes one `source_docs` row (origin outlet + bias/factuality/country + how
+identified + byline + extracted claims + excerpt), keyed by that `claim_id`.
+
+## Two graph entry points (`graph.py`)
+
+`build_graph` and the node functions are untouched. The invoke + ITEM_DONE
+logic is factored into `_invoke_graph`, and there are now two front doors:
+
+- `run_pipeline(claim, …)` — claim mode, as before.
+- `run_article_pipeline(article, …, url=None)` — emits ITEM_START, runs
+  `run_claim_extractor`, then `_invoke_graph` on the extracted primary claim.
+
+The dashboard shows a `claim_extractor` row only in article mode (it never
+emits an event in claim mode); a "Submitted src" line appears on the
+blackboard panel.
+
+## Downstream agents that now read `source_docs`
+
+- **Bias/Blindspot Analyzer** — folds the origin outlet into `per_domain`
+  (deduped by domain, tagged `"origin": True`), so it joins the L/C/R spread.
+  Adds origin-specific notes via `_origin_notes()`: names the outlet + its
+  rating, and — crucially — flags "No independent outlet corroborates the
+  submitted article" when every retrieved domain is the origin domain (or there
+  are none).
+- **Writer** — `_source_md()` prepends a deterministic **Source of the
+  submitted article** section (outlet, bias/factuality, identification method,
+  extracted primary + secondary claims) so the "find the source" result is
+  always present and accurate regardless of the LLM; `submitted_article` is
+  also included in the LLM payload.
+
+## Deliberate limits (see docs/HANDOFF.md "What's NOT built")
+
+Source ID is a heuristic string/URL match, not resolution — it can't see
+wire copy republished under a local masthead, and byline matching misses
+unlisted outlets. Only the single primary claim is run; secondary claims are
+recorded but not checked. Article mode always runs the full pipeline (no
+report-cache pre-check — the `claim_id` isn't known until after extraction).

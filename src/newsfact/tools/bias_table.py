@@ -69,6 +69,11 @@ class BiasTable:
     def __len__(self) -> int:
         return len(self._outlets)
 
+    def items(self):
+        """(domain, raw_row_dict) pairs — used by source identification to scan
+        for a known outlet name appearing in an article's text."""
+        return self._outlets.items()
+
     @staticmethod
     def _normalize(domain: str) -> str:
         d = (domain or "").strip().lower()

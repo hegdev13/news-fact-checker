@@ -16,7 +16,7 @@ import json
 import logging
 
 from newsfact.llm import LLMClient
-from newsfact.memory.store import BlackboardStore, Report
+from newsfact.memory.store import BlackboardStore, Report, SourceDoc
 from newsfact.observability.events import Event, EventKind, NullReporter, Reporter
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,9 @@ Hard rules:
 - Always include Opposition's strongest counterpoint, even when the verdict is
   "corroborated".
 - Report the L/C/R spread and name the blindspot(s) plainly.
+- If "submitted_article" is present, the claim was extracted from an article the
+  user provided: reference its originating outlet and whether independent
+  outlets corroborate it.
 - Be concise. No preamble, no "as an AI".
 
 Return ONLY a JSON object in this exact shape:
@@ -64,6 +67,28 @@ def _fallback_report(claim_text: str, verdict, bias, sf_articles, opp_articles, 
     return headline, body
 
 
+def _source_md(doc: SourceDoc | None) -> str:
+    """Deterministic 'find the source' section for article-input mode — prepended
+    to the report so it's always present and accurate regardless of the LLM."""
+    if doc is None:
+        return ""
+    lines = ["**Source of the submitted article**", ""]
+    if doc.origin_method == "none":
+        lines.append("- Publishing outlet: could not be identified from the submitted text.")
+    else:
+        lines.append(
+            f"- Publishing outlet: **{doc.origin_name}** ({doc.origin_domain}) — "
+            f"bias `{doc.origin_bias}`, factuality `{doc.origin_factuality}`, "
+            f"{doc.origin_country} (identified via {doc.origin_method})."
+        )
+    if doc.byline:
+        lines.append(f"- Byline: {doc.byline}")
+    lines.append(f"- Extracted primary claim: {doc.primary_claim}")
+    if doc.secondary_claims:
+        lines.append("- Secondary claims: " + "; ".join(doc.secondary_claims))
+    return "\n".join(lines) + "\n\n"
+
+
 def _audit_trail_md(store: BlackboardStore, cid: str) -> str:
     events = store.get_audit(cid)
     if not events:
@@ -87,6 +112,7 @@ def run_writer(
 
     verdict = store.get_verdict(cid, by=ROLE)
     bias = store.get_bias_report(cid, by=ROLE)
+    source_doc = store.get_source_doc(cid, by=ROLE)
     findings = {f.role: f for f in store.get_findings(cid, by=ROLE)}
     sf_articles = findings["source_finder"].articles if "source_finder" in findings else []
     opp = findings.get("opposition")
@@ -95,6 +121,14 @@ def run_writer(
 
     payload = json.dumps({
         "claim": claim_text,
+        "submitted_article": None if source_doc is None else {
+            "origin_outlet": source_doc.origin_name,
+            "origin_domain": source_doc.origin_domain,
+            "origin_bias": source_doc.origin_bias,
+            "origin_factuality": source_doc.origin_factuality,
+            "identified_via": source_doc.origin_method,
+            "secondary_claims": source_doc.secondary_claims,
+        },
         "verdict": None if not verdict else {
             "label": verdict.label, "confidence": verdict.confidence, "reasoning": verdict.reasoning,
         },
@@ -121,7 +155,7 @@ def run_writer(
         reporter.emit(Event(EventKind.ERROR, ROLE, "LLM report unusable; using deterministic fallback", cid))
         headline, body = _fallback_report(claim_text, verdict, bias, sf_articles, opp_articles, opp_summary)
 
-    body = body + "\n" + _audit_trail_md(store, cid)
+    body = _source_md(source_doc) + body + "\n" + _audit_trail_md(store, cid)
 
     report = Report(
         claim_id=cid,
