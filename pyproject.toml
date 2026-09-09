@@ -19,6 +19,9 @@ dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.14.0",
 ]
+nvidia = [
+    "openai>=1.0.0",
+]
 
 [project.scripts]
 newsfact = "newsfact.main:cli"

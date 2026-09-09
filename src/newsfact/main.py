@@ -33,6 +33,7 @@ from newsfact.agents.cross_checker import AnthropicLLMClient
 from newsfact.config import load_settings
 from newsfact.demo import FakeGdeltClient, FakeLLMClient
 from newsfact.graph import run_article_pipeline, run_pipeline
+from newsfact.llm import NvidiaMistralLLMClient
 from newsfact.memory.store import BlackboardStore, claim_id
 from newsfact.observability.console import ConsoleReporter, render_report_panel
 from newsfact.observability.events import AuditLogReporter, MultiReporter
@@ -98,14 +99,32 @@ def _resolve_claims(args: argparse.Namespace) -> list[str]:
 
 def _make_clients(demo_mode: bool, settings, console: Console):
     if demo_mode:
-        reason = "--demo flag" if settings.anthropic_api_key else "ANTHROPIC_API_KEY not set"
+        reason = "--demo flag" if settings.anthropic_api_key or settings.nvidia_api_key else "no API key set"
         console.print(
-            f"[bold yellow]DEMO MODE[/] ({reason}) — offline fixtures for GDELT and Claude. "
+            f"[bold yellow]DEMO MODE[/] ({reason}) — offline fixtures for GDELT and LLM. "
             "Every agent runs; nothing hits the network.\n"
         )
         return FakeGdeltClient(), FakeLLMClient()
-    console.print("[green]LIVE MODE[/] — real GDELT + Anthropic clients.\n")
-    return GdeltClient(settings.gdelt_api_base), AnthropicLLMClient(settings.anthropic_api_key, settings.model)
+
+    provider = settings.llm_provider
+    if provider == "nvidia":
+        if not settings.nvidia_api_key:
+            console.print("[red]NEWSFACT_LLM_PROVIDER=nvidia but NVIDIA_API_KEY is not set.[/]")
+            raise SystemExit(1)
+        console.print(
+            f"[green]LIVE MODE[/] — real GDELT + NVIDIA NIM ({settings.model}).\n"
+        )
+        llm = NvidiaMistralLLMClient(settings.nvidia_api_key, settings.model)
+    else:
+        if not settings.anthropic_api_key:
+            console.print("[red]ANTHROPIC_API_KEY is not set (and --demo was not passed).[/]")
+            raise SystemExit(1)
+        console.print(
+            f"[green]LIVE MODE[/] — real GDELT + Anthropic ({settings.model}).\n"
+        )
+        llm = AnthropicLLMClient(settings.anthropic_api_key, settings.model)
+
+    return GdeltClient(settings.gdelt_api_base), llm
 
 
 def _result_row(store: BlackboardStore, cid: str, label_hint: str, cached: bool) -> dict:
@@ -136,7 +155,7 @@ def cli() -> None:
         console.print("[red]Nothing to check.[/] Pass a claim, --file, --article, or --demo.")
         raise SystemExit(1)
 
-    demo_mode = args.demo or not settings.anthropic_api_key
+    demo_mode = args.demo or (not settings.anthropic_api_key and not settings.nvidia_api_key)
     db_path = Path("data/newsfact-demo.db") if demo_mode else Path(settings.db_path)
     if demo_mode and not args.keep_db and db_path.exists():
         db_path.unlink()
