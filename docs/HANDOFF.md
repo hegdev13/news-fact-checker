@@ -1,84 +1,104 @@
 # Handoff / Current State
 
-_Last updated: 2026-09-09, initial v1 build session._
+_Last updated: 2026-09-09, v2 session (all five agents + live terminal dashboard)._
 
 Read this first, before `CHANGELOG.md` or the session logs, if you're picking
 this project up fresh (human or agent).
 
-## What exists right now
+## What exists right now (v2)
 
-A working v1 slice: **Source-Finder → Cross-Checker**, orchestrated with
-LangGraph, sharing state through a SQLite blackboard store. Runnable via
-`python -m newsfact.main "<claim>"`. Fully tested offline (all external calls
-mocked) — see `tests/`.
+All five agents from the design, orchestrated with LangGraph, communicating
+only through the shared SQLite blackboard:
 
-No live end-to-end run has been done this session (no API keys were provided).
-The code is written against the real GDELT API and real Anthropic API, but has
-only been verified via mocked tests, not a live call. **First thing a new
-session with API keys should do: run one real claim through the CLI and sanity
-check the output** before building further on top of it.
+```
+START ─┬─▶ source_finder ─┐
+       └─▶ opposition ─────┴─▶ cross_checker ──(disputed & confidence < 0.6
+                                    │  ▲          & passes < 1)──▶ deep_research ─┐
+                                    │  └─────────────────────────────────────────┘
+                                    ▼ (else)
+                               bias_analyzer ──▶ writer ──▶ END
+```
+
+- **Source-Finder** — neutral GDELT search → `findings` row, `role=source_finder`.
+- **Opposition** — LLM makes disconfirming search angles, runs them → `findings`
+  row, `role=opposition`, with a `summary` counter-framing.
+- **Cross-Checker** — reads both roles, LLM adjudicates → `verdicts` row
+  (`corroborated`/`disputed`/`unverifiable`; <2 distinct domains across *both*
+  sets short-circuits to `unverifiable` with no LLM call).
+- **deep_research** — only on low-confidence `disputed`, max 1 pass: re-runs
+  Source-Finder + Opposition with broadened queries, `merge_finding`s the
+  results, loops back to Cross-Checker.
+- **Bias/Blindspot Analyzer** — maps every retrieved outlet via
+  `tools/bias_table.py` → `bias_reports` row (L/C/R spread, blindspot notes,
+  dominant side). No LLM.
+- **Writer** — reads verdict + both findings + bias report, LLM composes the
+  report, deterministic audit-trail section appended from `audit_log` →
+  `reports` row (also the "already checked" cache).
+
+**Observability**: every agent start/finish, tool call, and blackboard
+read/write is an `Event` (`observability/events.py`). `main.py` fans events to a
+`ConsoleReporter` (live `rich` dashboard) and an `AuditLogReporter` (→
+`audit_log` table). The store emits `bb_read`/`bb_write` when a call is
+attributed with `by=<agent>`.
+
+**Runs offline**: `python -m newsfact.main --demo` uses `demo/fixtures.py`
+(scripted GDELT + Claude) — full pipeline, full dashboard, no keys, no network.
+Three bundled sample claims hit all three verdict paths. With `ANTHROPIC_API_KEY`
+set it auto-switches to the real clients.
+
+**Still no live API call has been made** (env kept stubbed by request). The code
+is written against the real GDELT and Anthropic APIs but only exercised via
+mocks/fixtures. **First thing a session with keys should do:** run one real
+claim (`python -m newsfact.main "<claim>"`) and sanity-check the GDELT
+response-shape assumptions in `tools/gdelt.py::_parse_response` before trusting
+anything downstream.
 
 ## What's NOT built yet (in priority order)
 
-1. **Opposition agent** — the adversarial counter-evidence agent. This is the
-   project's actual differentiator per the resource doc (the "hard-mandated
-   disagreement" design, citing the Inducing Disagreement paper). Should run
-   in parallel with Source-Finder against the same claim, write its findings
-   to a separate `findings` row (or a `role` column distinguishing
-   source_finder/opposition rows — recommend adding a `role` column rather
-   than a new table). Cross-Checker's prompt will need to change from
-   "assess agreement across Source-Finder's results" to "adjudicate between
-   Source-Finder's and Opposition's results."
-2. **Bias/Blindspot Analyzer agent** — needs the outlet bias table gap closed
-   first (see below). Once that exists, this is a relatively mechanical
-   agent: map each article's outlet to a bias label, compute L/C/R spread,
-   flag if one side is missing entirely.
-3. **Writer agent** — merges verdict + bias breakdown into the final
-   structured report described in the resource doc. Straightforward once (1)
-   and (2) exist; low-value to build before them since there isn't much to
-   merge yet.
-4. **Indian-outlet bias table** — hand-curated JSON, à la HERALD's 224-outlet
-   table. Blocks (2). Needs a dedicated research pass, not just coding.
-5. **Deep-research loop on conflict** — the resource doc calls for a loop
-   that re-triggers when Cross-Checker finds conflicting sources. Needs (1)
-   to exist first (nothing to loop on with only one evidence source). Once
-   Opposition exists, this is a conditional edge in `graph.py` back into a
-   "gather more evidence" node.
-6. **Formal audit log** — append-only log of tool calls/sources/verdict
-   changes per claim. No existing-repo precedent per the resource doc; will
-   need custom design. Natural extension of the `findings`/`verdicts` tables
-   already in `memory/store.py` — could be a fourth `audit_log` table keyed
-   the same way.
-7. **Story/event clustering** — only matters once the system handles more
-   than one claim/story at a time (e.g. a "what's trending" mode rather than
-   "check this specific claim"). Not needed for the current claim-at-a-time
-   CLI.
+1. **Indian-outlet bias table is a stub.** `resources/outlet_bias.json` has ~42
+   outlets with hand-guessed ratings for the Indian ones (no standardized rater
+   exists — resource doc Gap #1). Needs a real research pass before the bias
+   output is trustworthy. Format is stable; just needs better data (or point
+   `NEWSFACT_BIAS_TABLE` at your own file).
+2. **Query-shaping LLM call for Source-Finder.** It currently searches the raw
+   claim string. A cheap LLM call to turn the claim into a good GDELT query
+   would materially improve recall. Opposition already does this for its side.
+3. **Verdict calibration.** Cross-Checker's confidence is one uncalibrated LLM
+   float. Resource doc names LIAR/FEVER/AVeriTeC for evaluation if this needs to
+   be defensible.
+4. **Deep-research loop is minimal.** One pass, query broadened by appending
+   keywords. Could be smarter (target the specific point of conflict
+   Cross-Checker identified) and allow >1 pass with better stop conditions.
+5. **GDELT client has no rate limiting / backoff.** Fine for CLI batch use;
+   revisit before any high-volume mode.
+6. **Story/event clustering** — still not needed (claim-at-a-time / small batch,
+   not a "what's trending" feed).
+7. **Web UI — v3, deliberately not started.** v2 is terminal-only by request.
 
 ## Known rough edges
 
-- `src/newsfact/tools/gdelt.py` has not been exercised against the live GDELT
-  endpoint — the response-shape assumptions in `_parse_response` are based on
-  GDELT's documented JSON schema, not a captured real response. Worth a
-  smoke test with a real API call early.
-- Cross-Checker's confidence score is currently a single float from one LLM
-  call with no calibration/eval against a labeled dataset. The resource doc
-  names LIAR/FEVER/AVeriTeC as benchmarks if this needs to be validated later.
-- No rate limiting / backoff on the GDELT client. Fine for CLI single-claim
-  use; would need it before any batch/loop use.
-- `NEWSFACT_MODEL` defaults to `claude-sonnet-4-5` in `config.py` — bump this
-  if a newer default model is preferred by the time you read this.
+- `tools/gdelt.py::_parse_response` assumptions are still unverified against a
+  real GDELT response (see above).
+- The demo `FakeLLMClient` is scripted by keyword, not smart — it recognises the
+  three bundled sample claims and falls back to a generic corroborated result
+  for anything else. It exists to make the pipeline *visible*, not to simulate
+  real model behaviour.
+- `ConsoleReporter` falls back to plain line printing when stdout isn't a TTY or
+  `--plain` is passed; the live region is only exercised interactively.
+- `NEWSFACT_MODEL` defaults to `claude-sonnet-4-5` in `config.py` — bump if a
+  newer default is preferred by the time you read this.
 
 ## Conventions to keep following
 
-- Every agent writes only *structured, verified* output to the shared store
-  (see `docs/ARCHITECTURE.md` § Shared memory) — never raw LLM reasoning
-  traces. Keep this invariant when adding Opposition/Bias/Writer.
-- Verdict labels are constrained to `corroborated` / `disputed` /
-  `unverifiable` — no binary true/false. Keep this when Writer starts
-  consuming verdicts too.
-- Update this file's "What exists" / "What's NOT built yet" sections whenever
-  you finish or start a agent, so the list above stays accurate rather than
-  aspirational.
-- Add a dated file to `docs/sessions/` for any session that makes a real
-  design decision (not every session — see `docs/sessions/README.md`).
-- Update `CHANGELOG.md`'s `Unreleased` section as you go, not just at the end.
+- Agents write only *structured, verified* artifacts to the blackboard — never
+  raw LLM reasoning traces. Keep this when adding/altering agents.
+- Verdict labels stay `corroborated` / `disputed` / `unverifiable`. No binary
+  true/false anywhere, including the Writer's prose.
+- Any new agent takes an optional `reporter` and emits `AGENT_START` /
+  `TOOL_CALL` / `AGENT_DONE` (plus `NOTE`s), and passes `by=<role>` on every
+  store read/write so it shows up in the dashboard and audit log.
+- Keep the pipeline runnable with `--demo` and no keys. If you add an agent that
+  needs a new external call, add a fake for it in `demo/fixtures.py`.
+- Update this file's "What exists" / "What's NOT built yet" when you finish or
+  start an agent. Update `CHANGELOG.md` `Unreleased` as you go. Add a dated
+  `docs/sessions/` file for real design decisions.

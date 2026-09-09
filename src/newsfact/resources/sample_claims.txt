@@ -1,0 +1,7 @@
+# Sample news items for the v2 demo pipeline (one claim/headline per line).
+# Lines starting with '#' and blank lines are ignored.
+# Run:  python -m newsfact.main --demo --file src/newsfact/resources/sample_claims.txt
+
+India's economy grew 7.8% in the most recent quarter, the fastest among major economies
+A new study claims a single cup of coffee per day reverses cognitive decline in adults over 60
+The central bank announced an emergency interest rate cut over the weekend

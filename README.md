@@ -1,57 +1,66 @@
 # News Fact-Checker & Polarization Analyzer
 
-A multi-agent system that takes a news claim and (eventually) both verifies it and
-shows how coverage of it splits across the political spectrum. See
+A multi-agent system that takes a news claim and both verifies it and shows how
+coverage of it splits across the political spectrum. See
 [`docs/resource-document.md`](docs/resource-document.md) for the full project
-brief, prior-art survey, and known gaps this project is scoping around.
+brief, prior-art survey, and known gaps.
 
-## Status: v1 (partial deliverable)
+## Status: v2 — all five agents + live terminal dashboard
 
-v1 implements the smallest slice of the full design that still demonstrates the
-core architecture: **two agents sharing a blackboard-style memory store**,
-orchestrated with LangGraph.
+v2 completes the agent roster from the design and makes the whole pipeline
+watchable in the terminal as it processes each news item.
 
-| Agent | Implemented? | Does |
+| Agent | Status | Does |
 |---|---|---|
-| **Source-Finder** | ✅ v1 | Queries GDELT for coverage of a claim, writes structured findings to shared memory |
-| **Cross-Checker** | ✅ v1 | Reads Source-Finder's findings, asks Claude to assess agreement/conflict across independent outlets, writes a confidence-scored verdict back to shared memory |
-| Opposition | ⬜ not yet | Adversarial counter-evidence search (see `docs/HANDOFF.md`) |
-| Bias/Blindspot Analyzer | ⬜ not yet | Outlet-level L/C/R mapping |
-| Writer | ⬜ not yet | Final structured report |
+| **Source-Finder** | ✅ | Neutral GDELT search for coverage of the claim; writes structured findings to the shared blackboard |
+| **Opposition** | ✅ | **Hard-mandated adversary** — LLM generates disconfirming search angles, runs them, writes counter-evidence + a one-line counter-framing |
+| **Cross-Checker** | ✅ | Adjudicates Source-Finder vs Opposition evidence into a confidence-scored verdict (`corroborated` / `disputed` / `unverifiable`, never true/false) |
+| **Bias/Blindspot Analyzer** | ✅ | Maps every retrieved outlet to a bias/factuality rating, computes the L/C/R spread, flags blindspots |
+| **Writer** | ✅ | Merges verdict + evidence + opposition + bias into one report; appends a deterministic audit trail |
 
-This is intentionally a partial build. `docs/HANDOFF.md` has the full state of
-what's done, what's stubbed, and the recommended next steps for whoever (human
-or agent) picks this up next.
+Orchestration (LangGraph):
 
-## Architecture
+```
+START ─┬─▶ source_finder ─┐
+       └─▶ opposition ─────┴─▶ cross_checker ──(disputed & low confidence)──▶ deep_research ─┐
+                                    │  ▲                                                      │
+                                    │  └──────────────────────────────────────────────────────┘
+                                    ▼ (else)
+                               bias_analyzer ──▶ writer ──▶ END
+```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full write-up.
-Short version: a hybrid blackboard pattern — a SQLite-backed shared store holds
-verified intermediate artifacts (claims, findings, verdicts) that any agent can
-read; each agent's raw reasoning stays local. Orchestration uses LangGraph's
-typed `State` object passed through a graph of agent nodes.
+Agents never hand state to each other directly — they read and write a shared
+SQLite **blackboard**, and every read/write/tool-call is emitted as an event
+that the live dashboard renders and the `audit_log` table persists.
 
-## Setup
+## Quick start (no API keys needed)
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env
-# edit .env and set ANTHROPIC_API_KEY (required for Cross-Checker's reasoning step)
+python -m newsfact.main --demo
 ```
 
-GDELT's DOC 2.0 API needs no API key.
+`--demo` runs the full 5-agent pipeline over three bundled sample news items
+using offline fixtures for GDELT and Claude — nothing hits the network. You get
+the live dashboard, three verdict paths (corroborated / disputed-with-loop /
+unverifiable), a rendered report per item, and a run recap.
 
-## Usage
+Add `--plain` to disable the live region and print a flat event trace (good for
+piping to a file). Add `--json` for a machine-readable summary.
+
+## Real run
 
 ```bash
-python -m newsfact.main "Claim or headline to check"
+cp .env.example .env          # then set ANTHROPIC_API_KEY
+python -m newsfact.main "Claim or headline to check" "A second claim"
+python -m newsfact.main --file path/to/claims.txt
 ```
 
-This runs the Source-Finder → Cross-Checker graph once, prints a JSON result,
-and caches it in `data/newsfact.db` keyed by the claim text so re-running the
-same claim doesn't re-hit GDELT or the LLM.
+With `ANTHROPIC_API_KEY` set it uses the real Anthropic API and the live GDELT
+DOC 2.0 API (no GDELT key required). Results are cached in `data/newsfact.db`
+keyed by claim text, so re-checking the same claim replays the stored report
+instead of re-running the pipeline. `--no-cache` forces a re-run.
 
 ## Tests
 
@@ -59,40 +68,34 @@ same claim doesn't re-hit GDELT or the LLM.
 pytest
 ```
 
-All tests run offline — GDELT HTTP calls and Claude API calls are mocked, so no
-API keys are required to run the test suite.
+All tests run offline — GDELT and Anthropic calls are mocked or use the demo
+fixtures. No API keys required.
 
 ## Project layout
 
 ```
 src/newsfact/
-  agents/          # one module per agent
-  tools/           # external API clients (GDELT, later: bias tables, etc.)
-  memory/          # shared SQLite blackboard store
-  graph.py         # LangGraph wiring between agents
-  main.py          # CLI entrypoint
+  agents/          source_finder, opposition, cross_checker, bias_analyzer, writer
+  tools/           gdelt.py, bias_table.py
+  memory/          store.py — shared SQLite blackboard (claims, findings, verdicts,
+                   bias_reports, reports, audit_log)
+  observability/   events.py (event model + reporter sinks), console.py (live dashboard)
+  demo/            fixtures.py — offline FakeGdeltClient / FakeLLMClient
+  resources/       outlet_bias.json (curated bias table), sample_claims.txt
+  graph.py         LangGraph wiring for the 5-agent pipeline + deep-research loop
+  main.py          CLI entrypoint
 docs/
-  resource-document.md   # original project brief / research
-  ARCHITECTURE.md         # design decisions and rationale
-  HANDOFF.md              # current state + next steps, kept up to date every session
-  sessions/               # dated session logs (see docs/sessions/README.md)
+  resource-document.md   original brief / research
+  ARCHITECTURE.md         design decisions and rationale
+  HANDOFF.md              current state + next steps (read this first)
+  sessions/               dated session logs
 tests/
-CHANGELOG.md
 ```
 
 ## Contributing across sessions / agents
 
-This project is built incrementally across multiple Claude sessions. Before
-starting work:
-
-1. Read `docs/HANDOFF.md` for current state and open threads.
-2. Check `CHANGELOG.md` for what changed most recently.
-3. Skim the latest file in `docs/sessions/` if you need more detail on *why*
-   a decision was made.
-
-Before ending a session that changed anything non-trivial:
-
-1. Update `CHANGELOG.md` (Keep a Changelog format, `Unreleased` section).
-2. Update `docs/HANDOFF.md` if the state of "what's done / what's next" changed.
-3. Add a dated file under `docs/sessions/` if the session made architectural
-   decisions worth explaining to a future reader.
+Before starting: read `docs/HANDOFF.md`, then `CHANGELOG.md`, then the latest
+`docs/sessions/` entry. Before ending a session that changed anything
+non-trivial: update `CHANGELOG.md` (`Unreleased`), update `docs/HANDOFF.md` if
+"what's done / what's next" moved, and add a dated `docs/sessions/` file if the
+session made architectural decisions.

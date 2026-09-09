@@ -1,3 +1,3 @@
-"""newsfact: multi-agent news fact-checker & polarization analyzer (v1)."""
+"""newsfact: multi-agent news fact-checker & polarization analyzer (v2)."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -20,6 +20,7 @@ class Settings:
     model: str
     gdelt_api_base: str
     db_path: str
+    bias_table_path: str | None
 
 
 def load_settings() -> Settings:
@@ -30,4 +31,7 @@ def load_settings() -> Settings:
             "GDELT_API_BASE", "https://api.gdeltproject.org/api/v2/doc/doc"
         ),
         db_path=os.getenv("NEWSFACT_DB_PATH", "data/newsfact.db"),
+        # None -> Bias/Blindspot Analyzer loads the bundled table in
+        # newsfact/resources/outlet_bias.json. Override with a path to your own.
+        bias_table_path=os.getenv("NEWSFACT_BIAS_TABLE") or None,
     )
