@@ -19,9 +19,14 @@ dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.14.0",
 ]
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
 
 [project.scripts]
 newsfact = "newsfact.main:cli"
+newsfact-server = "newsfact.web:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

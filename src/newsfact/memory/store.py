@@ -400,6 +400,20 @@ class BlackboardStore:
             self._emit(EventKind.BB_READ, by, "read prior report (cache)", cid)
         return report
 
+    def list_reports(self, limit: int = 50) -> list[Report]:
+        """Newest-first list of completed reports (used by the web UI feed)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT claim_id, headline, verdict_label, verdict_confidence, body_md, created_at
+                   FROM reports ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [
+            Report(claim_id=r[0], headline=r[1], verdict_label=r[2],
+                   verdict_confidence=r[3], body_md=r[4], created_at=r[5])
+            for r in rows
+        ]
+
     # --- audit log -----------------------------------------------------
     def append_audit(self, event: Event) -> None:
         with self._connect() as conn:
