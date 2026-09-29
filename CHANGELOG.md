@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — v3: web UI
+- **FastAPI web layer** (`web.py`) — routes under `/api`: health, completed-report
+  feed (`GET /api/reports`), full per-claim detail (`GET /api/reports/{cid}`),
+  async single-claim checks (`POST /api/check` + `GET /api/check/{cid}` polling,
+  pipeline runs in a background thread), and `POST /api/check/demo` to seed the
+  feed with the bundled sample claims. Runs offline in demo mode with no API key.
+  New `newsfact-server` console script and `web` extra (`fastapi`, `uvicorn`).
+- **FactGround React UI** (`client/`, new) — Vite + React 19 + TypeScript + Tailwind
+  v4 dashboard: story feed from real reports, L/C/R bias meter, claim-level
+  verification, per-outlet source cards, blindspot warnings, and a Pipeline Audit
+  Trail tab rendered from `audit_log`. Search submits the claim to the backend and
+  polls the job; falls back to a local sample feed when the API is unreachable.
+- `BlackboardStore.list_reports()` — newest-first completed-report feed for the UI.
+- Docs: README quick-start for the web stack; HANDOFF updated.
+
 ## [0.2.0] — 2026-09-09 — "v2: all five agents + live terminal dashboard"
 
 ### Added

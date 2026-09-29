@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* FactGround brand palette — exposed as utility classes
+   (bg-fg-cream, text-fg-teal, ...) alongside the arbitrary hex values
+   already used throughout the UI. */
+@theme {
+  --color-fg-cream: #f7f4d6;
+  --color-fg-teal: #105666;
+  --color-fg-pine: #0a3323;
+  --color-fg-olive: #839958;
+  --color-fg-salmon: #d3968c;
+}
+
+@keyframes fg-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* modal/panel entrance, used as .animate-fadeIn */
+.animate-fadeIn {
+  animation: fg-fade-in 0.2s ease-out;
+}
+
+/* hide horizontal scrollbars on the topics bar */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

@@ -5,10 +5,11 @@ coverage of it splits across the political spectrum. See
 [`docs/resource-document.md`](docs/resource-document.md) for the full project
 brief, prior-art survey, and known gaps.
 
-## Status: v2 — all five agents + live terminal dashboard
+## Status: v3 — all five agents + live terminal dashboard + web UI
 
-v2 completes the agent roster from the design and makes the whole pipeline
-watchable in the terminal as it processes each news item.
+v3 adds a browser UI (FactGround) on top of the v2 pipeline: a FastAPI layer in
+`web.py` exposes the pipeline over `/api`, and the React app in `client/` renders
+the feed, verdicts, bias/coverage meters, and the audit trail.
 
 | Agent | Status | Does |
 |---|---|---|
@@ -62,6 +63,31 @@ DOC 2.0 API (no GDELT key required). Results are cached in `data/newsfact.db`
 keyed by claim text, so re-checking the same claim replays the stored report
 instead of re-running the pipeline. `--no-cache` forces a re-run.
 
+## Web UI (FactGround)
+
+Two processes: the FastAPI backend (a browser-facing version of the pipeline)
+and the Vite dev server.
+
+```bash
+# terminal 1 — backend (uses the same demo/live mode as the CLI)
+pip install -e ".[web]"        # once
+newsfact-server                # or: python -m uvicorn newsfact.web:app --port 8000
+
+# terminal 2 — React UI
+cd client
+npm install                    # once
+npm run dev                    # http://localhost:5173
+```
+
+The Vite dev server proxies `/api` → `http://localhost:8000`. On first load the
+dashboard is empty until you either paste a claim/URL into the search bar or hit
+**Run demo pipeline**, which runs the three bundled sample claims through the
+backend and populates the feed. Re-checking a claim the store already knows
+replays the cached report instantly.
+
+If the API is unreachable the UI falls back to a local sample feed so it still
+renders (with a banner telling you the backend is offline).
+
 ## Tests
 
 ```bash
@@ -84,6 +110,8 @@ src/newsfact/
   resources/       outlet_bias.json (curated bias table), sample_claims.txt
   graph.py         LangGraph wiring for the 5-agent pipeline + deep-research loop
   main.py          CLI entrypoint
+  web.py           FastAPI layer behind the web UI (v3)
+client/            FactGround React UI (Vite + React + TS + Tailwind v4)
 docs/
   resource-document.md   original brief / research
   ARCHITECTURE.md         design decisions and rationale

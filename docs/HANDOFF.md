@@ -1,11 +1,13 @@
 # Handoff / Current State
 
-_Last updated: 2026-09-09, v2 session (all five agents + live terminal dashboard)._
+_Last updated: 2026-09-29, v3 session (web UI: FactGround + FastAPI layer)._
 
 Read this first, before `CHANGELOG.md` or the session logs, if you're picking
 this project up fresh (human or agent).
 
-## What exists right now (v2)
+## What exists right now (v3)
+
+The full v2 pipeline plus a browser UI on top:
 
 All five agents from the design, orchestrated with LangGraph, communicating
 only through the shared SQLite blackboard:
@@ -35,11 +37,23 @@ START ─┬─▶ source_finder ─┐
   report, deterministic audit-trail section appended from `audit_log` →
   `reports` row (also the "already checked" cache).
 
-**Observability**: every agent start/finish, tool call, and blackboard
-read/write is an `Event` (`observability/events.py`). `main.py` fans events to a
-`ConsoleReporter` (live `rich` dashboard) and an `AuditLogReporter` (→
-`audit_log` table). The store emits `bb_read`/`bb_write` when a call is
-attributed with `by=<agent>`.
+- **Observability**: every agent start/finish, tool call, and blackboard
+  read/write is an `Event` (`observability/events.py`). `main.py` fans events to a
+  `ConsoleReporter` (live `rich` dashboard) and an `AuditLogReporter` (→
+  `audit_log` table). The store emits `bb_read`/`bb_write` when a call is
+  attributed with `by=<agent>`.
+- **Web API** (`web.py`) — FastAPI layer, routes under `/api`: health, the
+  completed-report feed, per-claim detail, an async `POST /api/check` (pipeline
+  runs in a background thread, poll via `GET /api/check/{cid}`), and a
+  `POST /api/check/demo` that seeds the feed with the three sample claims.
+  Run it with `newsfact-server` or `uvicorn newsfact.web:app`.
+- **FactGround UI** (`client/`) — Vite + React + TypeScript + Tailwind v4
+  dashboard. Story feed built from real reports (verdict → credibility/score,
+  L/C/R bias meter from `bias_reports`, blindspot warnings, per-outlet source
+  cards, claim-level verification from verdict + opposition framing, and a
+  "Pipeline Audit Trail" tab rendered from `audit_log`). Searching runs the
+  real pipeline through the async job flow with polling. If the API is
+  unreachable it falls back to a local sample feed so the UI still renders.
 
 **Runs offline**: `python -m newsfact.main --demo` uses `demo/fixtures.py`
 (scripted GDELT + Claude) — full pipeline, full dashboard, no keys, no network.
@@ -73,7 +87,11 @@ anything downstream.
    revisit before any high-volume mode.
 6. **Story/event clustering** — still not needed (claim-at-a-time / small batch,
    not a "what's trending" feed).
-7. **Web UI — v3, deliberately not started.** v2 is terminal-only by request.
+7. ~~**Web UI — v3, deliberately not started.**~~ **Built as of 2026-09-29**:
+   FactGround dashboard (`client/`) + FastAPI layer (`web.py`). Next UI gaps:
+   streaming progress (SSE/WebSocket) for long checks instead of polling, a
+   rendered-markdown view of the Writer report (`body_md` is returned but not
+   yet displayed), and multi-claim batch submission.
 
 ## Known rough edges
 
